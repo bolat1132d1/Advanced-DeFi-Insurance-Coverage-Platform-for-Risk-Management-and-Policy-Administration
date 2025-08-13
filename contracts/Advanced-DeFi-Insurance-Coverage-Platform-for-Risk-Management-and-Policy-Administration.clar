@@ -1,325 +1,392 @@
-;; Advanced DeFi Insurance Coverage Platform for Risk Management and Policy Administration
-;; Implements sophisticated policy underwriting with multi-layered security protocols
-;; Delivers comprehensive insurance coverage tracking with automated claim processing capabilities
+;; Decentralized Finance Insurance Protocol for Smart Contract Coverage
+;; Implements automated claim processing with risk-based premium calculations
+;; Provides comprehensive protection against DeFi protocol failures and exploits
 
-;; ===== Insurance platform governance and authority configuration =====
+;; ===== Protocol governance and administrative constants =====
 
-;; Central insurance authority responsible for platform oversight and regulatory compliance
-(define-constant insurance-platform-authority tx-sender)
+;; Insurance pool administrator with emergency powers
+(define-constant protocol-admin tx-sender)
+(define-constant minimum-coverage-period u144) ;; 1 day in blocks
+(define-constant maximum-coverage-period u1008000) ;; ~7 years in blocks
+(define-constant base-premium-rate u1000) ;; 0.1% in basis points
+(define-constant claim-investigation-period u1008) ;; 1 week in blocks
 
-;; ===== Robust error handling system with specific insurance-related response codes =====
+;; ===== Comprehensive error response system =====
 
-;; Policy management error responses for comprehensive failure handling
-(define-constant policy-lookup-failure-error (err u401))
-(define-constant policy-already-exists-error (err u402))
-(define-constant coverage-validation-failed-error (err u403))
-(define-constant premium-amount-invalid-error (err u404))
-(define-constant unauthorized-policy-access-error (err u405))
-(define-constant policyholder-validation-error (err u406))
-(define-constant insufficient-authority-privileges-error (err u400))
-(define-constant policy-access-violation-error (err u407))
-(define-constant risk-category-format-error (err u408))
+(define-constant policy-not-active-error (err u501))
+(define-constant insufficient-premium-payment-error (err u502))
+(define-constant coverage-amount-invalid-error (err u503))
+(define-constant claim-already-submitted-error (err u504))
+(define-constant claim-investigation-ongoing-error (err u505))
+(define-constant unauthorized-claim-processor-error (err u506))
+(define-constant insufficient-pool-funds-error (err u507))
+(define-constant policy-expired-error (err u508))
+(define-constant invalid-protocol-address-error (err u509))
+(define-constant claim-exceeds-coverage-error (err u510))
 
-;; ===== Core platform state variables for insurance operations tracking =====
+;; ===== Core insurance protocol state management =====
 
-;; Incremental policy identification system for unique coverage assignments
-(define-data-var insurance-policy-sequence uint u0)
+(define-data-var total-insurance-pool-balance uint u0)
+(define-data-var active-policies-count uint u0)
+(define-data-var total-claims-paid uint u0)
+(define-data-var policy-id-counter uint u0)
+(define-data-var claim-id-counter uint u0)
 
-;; ===== Comprehensive data structures for insurance policy management =====
+;; ===== Primary insurance data structures =====
 
-;; Master insurance policy registry containing all coverage details and metadata
-(define-map insurance-coverage-database
-  { policy-reference-number: uint }
+;; Active insurance policies with coverage details
+(define-map active-insurance-policies
+  { policy-id: uint }
   {
-    coverage-plan-title: (string-ascii 64),
-    policy-holder-principal: principal,
-    premium-amount-microSTX: uint,
-    policy-creation-timestamp: uint,
-    coverage-terms-description: (string-ascii 128),
-    risk-classification-tags: (list 10 (string-ascii 32))
+    insured-protocol: principal,
+    policy-holder: principal,
+    coverage-amount: uint,
+    premium-paid: uint,
+    policy-start-block: uint,
+    policy-end-block: uint,
+    risk-score: uint,
+    is-active: bool
   }
 )
 
-;; Advanced authorization matrix for controlling policy access and claim permissions
-(define-map policy-authorization-matrix
-  { policy-reference-number: uint, authorized-principal: principal }
-  { authorization-status: bool }
+;; Insurance claims tracking and processing
+(define-map insurance-claims
+  { claim-id: uint }
+  {
+    policy-id: uint,
+    claimant: principal,
+    claim-amount: uint,
+    incident-description: (string-ascii 256),
+    claim-submission-block: uint,
+    investigation-deadline: uint,
+    claim-status: (string-ascii 20),
+    approved-payout: uint
+  }
 )
 
-;; ===== Internal validation utilities for data integrity and security enforcement =====
-
-;; Risk category validation function ensuring proper tag formatting standards
-;; Validates individual risk classification tags against platform requirements
-(define-private (validate-risk-category-format (risk-tag (string-ascii 32)))
-  (and
-    ;; Risk tag cannot be empty or null
-    (> (len risk-tag) u0)
-    ;; Risk tag must stay within character limits
-    (< (len risk-tag) u33)
-  )
+;; Protocol risk assessments for premium calculation
+(define-map protocol-risk-profiles
+  { protocol-address: principal }
+  {
+    risk-category: (string-ascii 32),
+    historical-incidents: uint,
+    total-value-locked: uint,
+    security-audit-score: uint,
+    risk-multiplier: uint
+  }
 )
 
-;; Comprehensive risk tag collection validation for policy categorization
-;; Ensures all risk classification tags meet platform standards
-(define-private (verify-risk-tag-collection-integrity (tag-collection (list 10 (string-ascii 32))))
-  (and
-    ;; Collection must contain minimum required tags
-    (> (len tag-collection) u0)
-    ;; Collection cannot exceed maximum tag limit
-    (<= (len tag-collection) u10)
-    ;; Every tag in collection must pass individual validation
-    (is-eq (len (filter validate-risk-category-format tag-collection)) (len tag-collection))
-  )
+;; Authorized claim processors and investigators
+(define-map authorized-claim-processors
+  { processor: principal }
+  { is-authorized: bool }
 )
 
-;; Policy existence verification utility for database consistency checks
-;; Returns confirmation of policy presence in insurance coverage database
-(define-private (confirm-policy-exists-in-database (policy-reference-number uint))
-  (is-some (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number }))
-)
+;; ===== Private utility functions for risk assessment and calculations =====
 
-;; Premium amount extraction function with safe fallback mechanisms
-;; Retrieves policy premium with default zero value for missing policies
-(define-private (extract-policy-premium-amount (policy-reference-number uint))
-  (default-to u0
-    (get premium-amount-microSTX
-      (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number })
+;; Calculate dynamic premium based on coverage amount and protocol risk
+(define-private (calculate-premium-amount 
+  (coverage-amount uint) 
+  (coverage-period-blocks uint) 
+  (risk-multiplier uint))
+  (let
+    (
+      (base-premium (* coverage-amount base-premium-rate))
+      (period-factor (/ coverage-period-blocks minimum-coverage-period))
+      (risk-adjusted-premium (* base-premium risk-multiplier))
     )
+    (/ (* risk-adjusted-premium period-factor) u10000)
   )
 )
 
-;; Policyholder verification mechanism with principal identity validation
-;; Confirms whether specified principal holds ownership of the insurance policy
-(define-private (verify-policyholder-identity (policy-reference-number uint) (principal-for-verification principal))
-  (match (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number })
-    policy-record (is-eq (get policy-holder-principal policy-record) principal-for-verification)
+;; Validate protocol exists and has risk profile
+(define-private (is-valid-insurable-protocol (protocol-address principal))
+  (is-some (map-get? protocol-risk-profiles { protocol-address: protocol-address }))
+)
+
+;; Check if policy is currently active and valid
+(define-private (is-policy-currently-active (policy-id uint))
+  (match (map-get? active-insurance-policies { policy-id: policy-id })
+    policy-data 
+      (and 
+        (get is-active policy-data)
+        (>= block-height (get policy-start-block policy-data))
+        (<= block-height (get policy-end-block policy-data))
+      )
     false
   )
 )
 
-;; ===== Public insurance policy management functions for external interactions =====
-
-;; Comprehensive insurance policy creation with extensive validation protocols
-;; Creates new insurance coverage with complete risk assessment and premium calculation
-(define-public (create-insurance-coverage-policy
-  (coverage-plan-title (string-ascii 64))
-  (premium-amount-microSTX uint)
-  (coverage-terms-description (string-ascii 128))
-  (risk-classification-tags (list 10 (string-ascii 32)))
+;; Verify sufficient pool funds for potential claim payout
+(define-private (verify-pool-liquidity (required-amount uint))
+  (>= (var-get total-insurance-pool-balance) required-amount)
 )
+
+;; ===== Administrative functions for protocol setup =====
+
+;; Add new protocol to insurance coverage with risk assessment
+(define-public (register-insurable-protocol
+  (protocol-address principal)
+  (risk-category (string-ascii 32))
+  (security-audit-score uint)
+  (estimated-tvl uint))
   (let
     (
-      ;; Generate sequential policy identifier for new coverage registration
-      (fresh-policy-identifier (+ (var-get insurance-policy-sequence) u1))
+      ;; Calculate risk multiplier based on audit score and category
+      (risk-multiplier (if (<= security-audit-score u50) u300 u100))
     )
-    ;; Rigorous input validation with comprehensive error reporting
-    ;; Policy title cannot be empty string
-    (asserts! (> (len coverage-plan-title) u0) coverage-validation-failed-error)
-    ;; Policy title must respect maximum length constraints
-    (asserts! (< (len coverage-plan-title) u65) coverage-validation-failed-error)
-    ;; Premium must be positive amount
-    (asserts! (> premium-amount-microSTX u0) premium-amount-invalid-error)
-    ;; Premium cannot exceed platform maximum limits
-    (asserts! (< premium-amount-microSTX u1000000000) premium-amount-invalid-error)
-    ;; Coverage description cannot be empty
-    (asserts! (> (len coverage-terms-description) u0) coverage-validation-failed-error)
-    ;; Coverage description must meet length requirements
-    (asserts! (< (len coverage-terms-description) u129) coverage-validation-failed-error)
-    ;; Risk classification tags must pass validation protocols
-    (asserts! (verify-risk-tag-collection-integrity risk-classification-tags) risk-category-format-error)
+    ;; Only protocol admin can register new protocols
+    (asserts! (is-eq tx-sender protocol-admin) unauthorized-claim-processor-error)
+    ;; Audit score must be between 0-100
+    (asserts! (<= security-audit-score u100) coverage-amount-invalid-error)
+    ;; TVL must be positive
+    (asserts! (> estimated-tvl u0) coverage-amount-invalid-error)
 
-    ;; Insert new policy record into insurance coverage database
-    (map-insert insurance-coverage-database
-      { policy-reference-number: fresh-policy-identifier }
+    ;; Register protocol with risk profile
+    (map-set protocol-risk-profiles
+      { protocol-address: protocol-address }
       {
-        coverage-plan-title: coverage-plan-title,
-        policy-holder-principal: tx-sender,
-        premium-amount-microSTX: premium-amount-microSTX,
-        policy-creation-timestamp: block-height,
-        coverage-terms-description: coverage-terms-description,
-        risk-classification-tags: risk-classification-tags
+        risk-category: risk-category,
+        historical-incidents: u0,
+        total-value-locked: estimated-tvl,
+        security-audit-score: security-audit-score,
+        risk-multiplier: risk-multiplier
+      }
+    )
+    (ok true)
+  )
+)
+
+;; Authorize claim processors for investigation and approval
+(define-public (authorize-claim-processor (processor-principal principal))
+  ;; Only admin can authorize processors
+  (asserts! (is-eq tx-sender protocol-admin) unauthorized-claim-processor-error)
+  
+  (map-set authorized-claim-processors
+    { processor: processor-principal }
+    { is-authorized: true }
+  )
+  (ok true)
+)
+
+;; ===== Core insurance policy management functions =====
+
+;; Purchase insurance coverage for specified DeFi protocol
+(define-public (purchase-insurance-policy
+  (protocol-to-insure principal)
+  (desired-coverage-amount uint)
+  (coverage-duration-blocks uint))
+  (let
+    (
+      (new-policy-id (+ (var-get policy-id-counter) u1))
+      (protocol-risk (unwrap! (map-get? protocol-risk-profiles { protocol-address: protocol-to-insure })
+        invalid-protocol-address-error))
+      (required-premium (calculate-premium-amount 
+        desired-coverage-amount 
+        coverage-duration-blocks 
+        (get risk-multiplier protocol-risk)))
+      (policy-end-block (+ block-height coverage-duration-blocks))
+    )
+    ;; Validate protocol is registered for insurance
+    (asserts! (is-valid-insurable-protocol protocol-to-insure) invalid-protocol-address-error)
+    ;; Coverage amount must be positive and reasonable
+    (asserts! (and (> desired-coverage-amount u0) (< desired-coverage-amount u1000000000000)) coverage-amount-invalid-error)
+    ;; Coverage period must be within acceptable range
+    (asserts! (and (>= coverage-duration-blocks minimum-coverage-period) 
+                   (<= coverage-duration-blocks maximum-coverage-period)) policy-expired-error)
+    ;; Verify sufficient STX sent for premium payment
+    (asserts! (>= (stx-get-balance tx-sender) required-premium) insufficient-premium-payment-error)
+
+    ;; Transfer premium to insurance pool
+    (try! (stx-transfer? required-premium tx-sender (as-contract tx-sender)))
+    
+    ;; Create new insurance policy
+    (map-insert active-insurance-policies
+      { policy-id: new-policy-id }
+      {
+        insured-protocol: protocol-to-insure,
+        policy-holder: tx-sender,
+        coverage-amount: desired-coverage-amount,
+        premium-paid: required-premium,
+        policy-start-block: block-height,
+        policy-end-block: policy-end-block,
+        risk-score: (get risk-multiplier protocol-risk),
+        is-active: true
       }
     )
 
-    ;; Establish automatic authorization for policy creator
-    (map-insert policy-authorization-matrix
-      { policy-reference-number: fresh-policy-identifier, authorized-principal: tx-sender }
-      { authorization-status: true }
-    )
-
-    ;; Increment global policy sequence counter for future registrations
-    (var-set insurance-policy-sequence fresh-policy-identifier)
-    ;; Return successful policy creation with identifier
-    (ok fresh-policy-identifier)
+    ;; Update global counters and pool balance
+    (var-set policy-id-counter new-policy-id)
+    (var-set active-policies-count (+ (var-get active-policies-count) u1))
+    (var-set total-insurance-pool-balance (+ (var-get total-insurance-pool-balance) required-premium))
+    
+    (ok new-policy-id)
   )
 )
 
-;; Advanced policy modification system with multi-layer validation architecture
-;; Enables policyholders to update coverage terms while preserving system integrity
-(define-public (modify-insurance-policy-details
-  (policy-reference-number uint)
-  (updated-coverage-plan-title (string-ascii 64))
-  (updated-premium-amount-microSTX uint)
-  (updated-coverage-terms-description (string-ascii 128))
-  (updated-risk-classification-tags (list 10 (string-ascii 32)))
-)
+;; Cancel active insurance policy with partial premium refund
+(define-public (cancel-insurance-policy (policy-id uint))
   (let
     (
-      ;; Fetch current policy data for validation and merging operations
-      (existing-policy-record (unwrap! (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number })
-        policy-lookup-failure-error))
+      (policy-data (unwrap! (map-get? active-insurance-policies { policy-id: policy-id })
+        policy-not-active-error))
+      (remaining-blocks (- (get policy-end-block policy-data) block-height))
+      (total-blocks (- (get policy-end-block policy-data) (get policy-start-block policy-data)))
+      (refund-amount (/ (* (get premium-paid policy-data) remaining-blocks) total-blocks))
     )
-    ;; Verify policy exists in coverage database
-    (asserts! (confirm-policy-exists-in-database policy-reference-number) policy-lookup-failure-error)
-    ;; Confirm caller has policyholder authority
-    (asserts! (is-eq (get policy-holder-principal existing-policy-record) tx-sender) policyholder-validation-error)
-    ;; Validate updated policy title is not empty
-    (asserts! (> (len updated-coverage-plan-title) u0) coverage-validation-failed-error)
-    ;; Validate updated policy title length requirements
-    (asserts! (< (len updated-coverage-plan-title) u65) coverage-validation-failed-error)
-    ;; Validate updated premium amount is positive
-    (asserts! (> updated-premium-amount-microSTX u0) premium-amount-invalid-error)
-    ;; Validate updated premium within platform limits
-    (asserts! (< updated-premium-amount-microSTX u1000000000) premium-amount-invalid-error)
-    ;; Validate updated description is not empty
-    (asserts! (> (len updated-coverage-terms-description) u0) coverage-validation-failed-error)
-    ;; Validate updated description length constraints
-    (asserts! (< (len updated-coverage-terms-description) u129) coverage-validation-failed-error)
-    ;; Validate updated risk classification tags
-    (asserts! (verify-risk-tag-collection-integrity updated-risk-classification-tags) risk-category-format-error)
+    ;; Only policy holder can cancel
+    (asserts! (is-eq tx-sender (get policy-holder policy-data)) unauthorized-claim-processor-error)
+    ;; Policy must be currently active
+    (asserts! (is-policy-currently-active policy-id) policy-not-active-error)
+    ;; Must have remaining coverage time
+    (asserts! (> remaining-blocks u0) policy-expired-error)
 
-    ;; Update policy record with new information while preserving ownership and timestamp
-    (map-set insurance-coverage-database
-      { policy-reference-number: policy-reference-number }
-      (merge existing-policy-record {
-        coverage-plan-title: updated-coverage-plan-title,
-        premium-amount-microSTX: updated-premium-amount-microSTX,
-        coverage-terms-description: updated-coverage-terms-description,
-        risk-classification-tags: updated-risk-classification-tags
+    ;; Deactivate policy
+    (map-set active-insurance-policies
+      { policy-id: policy-id }
+      (merge policy-data { is-active: false })
+    )
+
+    ;; Process refund if applicable
+    (if (> refund-amount u0)
+      (begin
+        (try! (as-contract (stx-transfer? refund-amount tx-sender (get policy-holder policy-data))))
+        (var-set total-insurance-pool-balance (- (var-get total-insurance-pool-balance) refund-amount))
+      )
+      true
+    )
+
+    (var-set active-policies-count (- (var-get active-policies-count) u1))
+    (ok refund-amount)
+  )
+)
+
+;; ===== Claims processing and payout system =====
+
+;; Submit insurance claim for protocol incident or exploit
+(define-public (submit-insurance-claim
+  (policy-id uint)
+  (claim-amount uint)
+  (incident-description (string-ascii 256)))
+  (let
+    (
+      (new-claim-id (+ (var-get claim-id-counter) u1))
+      (policy-data (unwrap! (map-get? active-insurance-policies { policy-id: policy-id })
+        policy-not-active-error))
+      (investigation-deadline (+ block-height claim-investigation-period))
+    )
+    ;; Verify policy is active and valid
+    (asserts! (is-policy-currently-active policy-id) policy-not-active-error)
+    ;; Only policy holder can submit claims
+    (asserts! (is-eq tx-sender (get policy-holder policy-data)) unauthorized-claim-processor-error)
+    ;; Claim amount cannot exceed coverage
+    (asserts! (<= claim-amount (get coverage-amount policy-data)) claim-exceeds-coverage-error)
+    ;; Claim amount must be positive
+    (asserts! (> claim-amount u0) coverage-amount-invalid-error)
+    ;; Description cannot be empty
+    (asserts! (> (len incident-description) u0) coverage-amount-invalid-error)
+
+    ;; Create new claim record
+    (map-insert insurance-claims
+      { claim-id: new-claim-id }
+      {
+        policy-id: policy-id,
+        claimant: tx-sender,
+        claim-amount: claim-amount,
+        incident-description: incident-description,
+        claim-submission-block: block-height,
+        investigation-deadline: investigation-deadline,
+        claim-status: "investigating",
+        approved-payout: u0
+      }
+    )
+
+    (var-set claim-id-counter new-claim-id)
+    (ok new-claim-id)
+  )
+)
+
+;; Process claim investigation and determine payout
+(define-public (process-claim-decision
+  (claim-id uint)
+  (approved-amount uint)
+  (final-status (string-ascii 20)))
+  (let
+    (
+      (claim-data (unwrap! (map-get? insurance-claims { claim-id: claim-id })
+        policy-not-active-error))
+      (policy-data (unwrap! (map-get? active-insurance-policies { policy-id: (get policy-id claim-data) })
+        policy-not-active-error))
+      (is-authorized (default-to false 
+        (get is-authorized (map-get? authorized-claim-processors { processor: tx-sender }))))
+    )
+    ;; Only authorized processors can make decisions
+    (asserts! (or is-authorized (is-eq tx-sender protocol-admin)) unauthorized-claim-processor-error)
+    ;; Investigation period must be complete
+    (asserts! (>= block-height (get investigation-deadline claim-data)) claim-investigation-ongoing-error)
+    ;; Approved amount cannot exceed original claim
+    (asserts! (<= approved-amount (get claim-amount claim-data)) claim-exceeds-coverage-error)
+    ;; Verify sufficient pool funds for payout
+    (asserts! (verify-pool-liquidity approved-amount) insufficient-pool-funds-error)
+
+    ;; Update claim with decision
+    (map-set insurance-claims
+      { claim-id: claim-id }
+      (merge claim-data {
+        claim-status: final-status,
+        approved-payout: approved-amount
       })
     )
-    ;; Return successful modification confirmation
-    (ok true)
+
+    ;; Process payout if approved
+    (if (and (> approved-amount u0) (is-eq final-status "approved"))
+      (begin
+        (try! (as-contract (stx-transfer? approved-amount tx-sender (get claimant claim-data))))
+        (var-set total-insurance-pool-balance (- (var-get total-insurance-pool-balance) approved-amount))
+        (var-set total-claims-paid (+ (var-get total-claims-paid) approved-amount))
+      )
+      true
+    )
+
+    (ok approved-amount)
   )
 )
 
-;; Secure policy ownership transfer protocol with comprehensive authorization checks
-;; Facilitates ownership transfer between principals with proper validation
-(define-public (execute-policy-ownership-transfer (policy-reference-number uint) (recipient-principal principal))
-  (let
-    (
-      ;; Retrieve current policy information for ownership verification
-      (current-policy-record (unwrap! (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number })
-        policy-lookup-failure-error))
-    )
-    ;; Confirm policy exists in database before transfer
-    (asserts! (confirm-policy-exists-in-database policy-reference-number) policy-lookup-failure-error)
-    ;; Verify current caller owns the policy
-    (asserts! (is-eq (get policy-holder-principal current-policy-record) tx-sender) policyholder-validation-error)
+;; ===== Read-only functions for policy and claim information =====
 
-    ;; Execute ownership transfer by updating policyholder principal
-    (map-set insurance-coverage-database
-      { policy-reference-number: policy-reference-number }
-      (merge current-policy-record { policy-holder-principal: recipient-principal })
-    )
-    ;; Return successful transfer confirmation
-    (ok true)
+;; Retrieve comprehensive policy information
+(define-read-only (get-policy-details (policy-id uint))
+  (ok (map-get? active-insurance-policies { policy-id: policy-id }))
+)
+
+;; Get current claim status and details
+(define-read-only (get-claim-information (claim-id uint))
+  (ok (map-get? insurance-claims { claim-id: claim-id }))
+)
+
+;; Calculate premium quote for potential insurance purchase
+(define-read-only (get-premium-quote 
+  (protocol-address principal) 
+  (coverage-amount uint) 
+  (coverage-blocks uint))
+  (match (map-get? protocol-risk-profiles { protocol-address: protocol-address })
+    risk-profile (ok (calculate-premium-amount coverage-amount coverage-blocks (get risk-multiplier risk-profile)))
+    invalid-protocol-address-error
   )
 )
 
-;; Permanent policy termination function with irreversible deletion capability
-;; Provides complete policy removal from insurance coverage database
-(define-public (terminate-insurance-policy (policy-reference-number uint))
-  (let
-    (
-      ;; Retrieve policy record for ownership verification before deletion
-      (policy-for-termination (unwrap! (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number })
-        policy-lookup-failure-error))
-    )
-    ;; Confirm policy exists before attempting termination
-    (asserts! (confirm-policy-exists-in-database policy-reference-number) policy-lookup-failure-error)
-    ;; Verify ownership authorization for deletion
-    (asserts! (is-eq (get policy-holder-principal policy-for-termination) tx-sender) policyholder-validation-error)
-
-    ;; Execute permanent policy removal from coverage database
-    (map-delete insurance-coverage-database { policy-reference-number: policy-reference-number })
-    ;; Return successful termination confirmation
-    (ok true)
-  )
-)
-
-;; ===== Read-only information retrieval functions for policy queries and system monitoring =====
-
-;; Comprehensive policy information retrieval with advanced authorization enforcement
-;; Returns detailed policy metadata for authorized users with proper access controls
-(define-read-only (retrieve-policy-comprehensive-details (policy-reference-number uint))
-  (let
-    (
-      ;; Fetch complete policy information from coverage database
-      (policy-record (unwrap! (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number })
-        policy-lookup-failure-error))
-      ;; Check explicit authorization permissions for requesting user
-      (user-has-direct-authorization (default-to false
-        (get authorization-status
-          (map-get? policy-authorization-matrix { policy-reference-number: policy-reference-number, authorized-principal: tx-sender })
-        )
-      ))
-    )
-    ;; Verify policy exists before processing access request
-    (asserts! (confirm-policy-exists-in-database policy-reference-number) policy-lookup-failure-error)
-    ;; Enforce authorization - allow policyholders and explicitly authorized users
-    (asserts! (or user-has-direct-authorization (is-eq (get policy-holder-principal policy-record) tx-sender)) policy-access-violation-error)
-
-    ;; Return comprehensive policy information to authorized users
-    (ok {
-      coverage-plan-title: (get coverage-plan-title policy-record),
-      policy-holder-principal: (get policy-holder-principal policy-record),
-      premium-amount-microSTX: (get premium-amount-microSTX policy-record),
-      policy-creation-timestamp: (get policy-creation-timestamp policy-record),
-      coverage-terms-description: (get coverage-terms-description policy-record),
-      risk-classification-tags: (get risk-classification-tags policy-record)
-    })
-  )
-)
-
-;; Platform-wide insurance statistics and administrative oversight information
-;; Provides comprehensive overview of total policies and platform authority
-(define-read-only (retrieve-platform-insurance-metrics)
+;; Comprehensive insurance pool statistics
+(define-read-only (get-insurance-pool-stats)
   (ok {
-    total-policies-registered: (var-get insurance-policy-sequence),
-    platform-authority: insurance-platform-authority
+    total-pool-balance: (var-get total-insurance-pool-balance),
+    active-policies: (var-get active-policies-count),
+    total-claims-paid: (var-get total-claims-paid),
+    total-policies-issued: (var-get policy-id-counter),
+    total-claims-submitted: (var-get claim-id-counter)
   })
 )
 
-;; Policy ownership verification utility for external authorization queries
-;; Returns the principal that holds ownership of the specified insurance policy
-(define-read-only (identify-policy-holder (policy-reference-number uint))
-  (match (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number })
-    policy-record (ok (get policy-holder-principal policy-record))
-    policy-lookup-failure-error
-  )
-)
-
-;; Comprehensive authorization status verification for policy access management
-;; Returns detailed authorization information for principal-policy combinations
-(define-read-only (check-policy-authorization-status (policy-reference-number uint) (principal-to-verify principal))
-  (let
-    (
-      ;; Retrieve policy record for ownership comparison
-      (policy-record (unwrap! (map-get? insurance-coverage-database { policy-reference-number: policy-reference-number })
-        policy-lookup-failure-error))
-      ;; Check for direct authorization permissions in matrix
-      (has-direct-authorization (default-to false
-        (get authorization-status
-          (map-get? policy-authorization-matrix { policy-reference-number: policy-reference-number, authorized-principal: principal-to-verify })
-        )
-      ))
-    )
-    ;; Return comprehensive authorization analysis
-    (ok {
-      has-explicit-permission: has-direct-authorization,
-      is-asset-owner: (is-eq (get policy-holder-principal policy-record) principal-to-verify),
-      can-access-content: (or has-direct-authorization (is-eq (get policy-holder-principal policy-record) principal-to-verify))
-    })
-  )
+;; Check protocol risk profile and insurability
+(define-read-only (get-protocol-risk-assessment (protocol-address principal))
+  (ok (map-get? protocol-risk-profiles { protocol-address: protocol-address }))
 )
