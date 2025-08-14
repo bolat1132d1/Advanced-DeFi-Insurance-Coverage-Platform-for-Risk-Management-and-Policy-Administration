@@ -122,6 +122,67 @@
   (>= (var-get total-insurance-pool-balance) required-amount)
 )
 
+;; Validate and sanitize protocol address input
+(define-private (validate-protocol-address (addr principal))
+  (and 
+    (not (is-eq addr tx-sender))
+    (not (is-eq addr (as-contract tx-sender)))
+  )
+)
+
+;; Validate risk category string format and content
+(define-private (validate-risk-category (category (string-ascii 32)))
+  (let ((category-len (len category)))
+    (and 
+      (> category-len u0)
+      (<= category-len u32)
+      (or 
+        (is-eq category "defi-lending")
+        (is-eq category "dex-protocol") 
+        (is-eq category "yield-farming")
+        (is-eq category "staking-protocol")
+        (is-eq category "derivatives")
+        (is-eq category "cross-chain-bridge")
+        (is-eq category "other-defi")
+      )
+    )
+  )
+)
+
+;; Validate processor principal is not contract or sender
+(define-private (validate-processor-principal (processor principal))
+  (and 
+    (not (is-eq processor tx-sender))
+    (not (is-eq processor (as-contract tx-sender)))
+  )
+)
+
+;; Validate coverage amount within reasonable bounds
+(define-private (validate-coverage-amount (amount uint))
+  (and 
+    (> amount u0)
+    (>= amount u1000000) ;; Minimum 1 STX coverage
+    (<= amount u1000000000000) ;; Maximum 1M STX coverage
+  )
+)
+
+;; Validate coverage duration is within acceptable range
+(define-private (validate-coverage-duration (blocks uint))
+  (and 
+    (>= blocks minimum-coverage-period)
+    (<= blocks maximum-coverage-period)
+  )
+)
+
+;; Validate claim ID exists and is not zero
+(define-private (validate-claim-id (claim-id uint))
+  (and 
+    (> claim-id u0)
+    (<= claim-id (var-get claim-id-counter))
+    (is-some (map-get? insurance-claims { claim-id: claim-id }))
+  )
+)
+
 ;; ===== Administrative functions for protocol setup =====
 
 ;; Add new protocol to insurance coverage with risk assessment
@@ -132,17 +193,26 @@
   (estimated-tvl uint))
   (let
     (
+      ;; Validate and sanitize all inputs
+      (validated-address (validate-protocol-address protocol-address))
+      (validated-category (validate-risk-category risk-category))
       ;; Calculate risk multiplier based on audit score and category
       (risk-multiplier (if (<= security-audit-score u50) u300 u100))
     )
     ;; Only protocol admin can register new protocols
     (asserts! (is-eq tx-sender protocol-admin) unauthorized-claim-processor-error)
+    ;; Validate protocol address
+    (asserts! validated-address invalid-protocol-address-error)
+    ;; Validate risk category format
+    (asserts! validated-category coverage-amount-invalid-error)
     ;; Audit score must be between 0-100
     (asserts! (<= security-audit-score u100) coverage-amount-invalid-error)
     ;; TVL must be positive
     (asserts! (> estimated-tvl u0) coverage-amount-invalid-error)
+    ;; Protocol shouldn't already be registered
+    (asserts! (is-none (map-get? protocol-risk-profiles { protocol-address: protocol-address })) claim-already-submitted-error)
 
-    ;; Register protocol with risk profile
+    ;; Register protocol with risk profile using validated inputs
     (map-set protocol-risk-profiles
       { protocol-address: protocol-address }
       {
@@ -159,10 +229,17 @@
 
 ;; Authorize claim processors for investigation and approval
 (define-public (authorize-claim-processor (processor-principal principal))
-  (begin
+  (let
+    (
+      (validated-processor (validate-processor-principal processor-principal))
+    )
     ;; Only admin can authorize processors
     (asserts! (is-eq tx-sender protocol-admin) unauthorized-claim-processor-error)
-
+    ;; Validate processor principal
+    (asserts! validated-processor invalid-protocol-address-error)
+    ;; Processor shouldn't already be authorized
+    (asserts! (is-none (map-get? authorized-claim-processors { processor: processor-principal })) claim-already-submitted-error)
+    
     (map-set authorized-claim-processors
       { processor: processor-principal }
       { is-authorized: true }
@@ -183,6 +260,9 @@
       (new-policy-id (+ (var-get policy-id-counter) u1))
       (protocol-risk (unwrap! (map-get? protocol-risk-profiles { protocol-address: protocol-to-insure })
         invalid-protocol-address-error))
+      ;; Validate inputs before using them
+      (validated-coverage (validate-coverage-amount desired-coverage-amount))
+      (validated-duration (validate-coverage-duration coverage-duration-blocks))
       (required-premium (calculate-premium-amount 
         desired-coverage-amount 
         coverage-duration-blocks 
@@ -191,18 +271,17 @@
     )
     ;; Validate protocol is registered for insurance
     (asserts! (is-valid-insurable-protocol protocol-to-insure) invalid-protocol-address-error)
-    ;; Coverage amount must be positive and reasonable
-    (asserts! (and (> desired-coverage-amount u0) (< desired-coverage-amount u1000000000000)) coverage-amount-invalid-error)
-    ;; Coverage period must be within acceptable range
-    (asserts! (and (>= coverage-duration-blocks minimum-coverage-period) 
-                   (<= coverage-duration-blocks maximum-coverage-period)) policy-expired-error)
+    ;; Validate coverage amount
+    (asserts! validated-coverage coverage-amount-invalid-error)
+    ;; Validate coverage duration
+    (asserts! validated-duration policy-expired-error)
     ;; Verify sufficient STX sent for premium payment
     (asserts! (>= (stx-get-balance tx-sender) required-premium) insufficient-premium-payment-error)
 
     ;; Transfer premium to insurance pool
     (try! (stx-transfer? required-premium tx-sender (as-contract tx-sender)))
-
-    ;; Create new insurance policy
+    
+    ;; Create new insurance policy using validated inputs
     (map-insert active-insurance-policies
       { policy-id: new-policy-id }
       {
@@ -221,7 +300,7 @@
     (var-set policy-id-counter new-policy-id)
     (var-set active-policies-count (+ (var-get active-policies-count) u1))
     (var-set total-insurance-pool-balance (+ (var-get total-insurance-pool-balance) required-premium))
-
+    
     (ok new-policy-id)
   )
 )
@@ -315,6 +394,8 @@
   (final-status (string-ascii 20)))
   (let
     (
+      ;; Validate claim ID first
+      (validated-claim-id (validate-claim-id claim-id))
       (claim-data (unwrap! (map-get? insurance-claims { claim-id: claim-id })
         policy-not-active-error))
       (policy-data (unwrap! (map-get? active-insurance-policies { policy-id: (get policy-id claim-data) })
@@ -322,6 +403,8 @@
       (is-authorized (default-to false 
         (get is-authorized (map-get? authorized-claim-processors { processor: tx-sender }))))
     )
+    ;; Validate claim ID
+    (asserts! validated-claim-id policy-not-active-error)
     ;; Only authorized processors can make decisions
     (asserts! (or is-authorized (is-eq tx-sender protocol-admin)) unauthorized-claim-processor-error)
     ;; Investigation period must be complete
