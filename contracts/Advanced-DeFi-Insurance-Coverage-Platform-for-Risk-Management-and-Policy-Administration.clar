@@ -159,14 +159,16 @@
 
 ;; Authorize claim processors for investigation and approval
 (define-public (authorize-claim-processor (processor-principal principal))
-  ;; Only admin can authorize processors
-  (asserts! (is-eq tx-sender protocol-admin) unauthorized-claim-processor-error)
-  
-  (map-set authorized-claim-processors
-    { processor: processor-principal }
-    { is-authorized: true }
+  (begin
+    ;; Only admin can authorize processors
+    (asserts! (is-eq tx-sender protocol-admin) unauthorized-claim-processor-error)
+
+    (map-set authorized-claim-processors
+      { processor: processor-principal }
+      { is-authorized: true }
+    )
+    (ok true)
   )
-  (ok true)
 )
 
 ;; ===== Core insurance policy management functions =====
@@ -199,7 +201,7 @@
 
     ;; Transfer premium to insurance pool
     (try! (stx-transfer? required-premium tx-sender (as-contract tx-sender)))
-    
+
     ;; Create new insurance policy
     (map-insert active-insurance-policies
       { policy-id: new-policy-id }
@@ -219,7 +221,7 @@
     (var-set policy-id-counter new-policy-id)
     (var-set active-policies-count (+ (var-get active-policies-count) u1))
     (var-set total-insurance-pool-balance (+ (var-get total-insurance-pool-balance) required-premium))
-    
+
     (ok new-policy-id)
   )
 )
